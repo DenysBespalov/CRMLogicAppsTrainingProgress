@@ -8,6 +8,12 @@
                     "parameters": {
                         "entityName": "sbq-zuoracrm",
                         "message": {
+                            "contentData": {
+                                "SubscriptionId": "@{body('Parse_JSON')?['SubscriptionAXSubscriptionId__c']}",
+                                "DongleId": "@{body('Parse_JSON')?['SubscriptionDongelNo__c']}",
+                                "SubscriptionName": "@{body('Parse_JSON')?['SubscriptionName']}",
+                                "AccountNumber": "@{body('Parse_JSON')?['AccountAccountNumber']}"
+                            },
                             "label": "Zuora Message"
                         }
                     },
@@ -15,6 +21,46 @@
                         "connectionName": "serviceBus",
                         "operationId": "sendMessage",
                         "serviceProviderId": "/serviceProviders/serviceBus"
+                    }
+                },
+                "runAfter": {
+                    "Parse_JSON": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Response": {
+                "type": "Response",
+                "kind": "http",
+                "inputs": {
+                    "statusCode": 200
+                },
+                "runAfter": {
+                    "Send_message": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Parse_JSON": {
+                "type": "ParseJson",
+                "inputs": {
+                    "content": "@triggerBody()",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "SubscriptionAXSubscriptionId__c": {
+                                "type": "string"
+                            },
+                            "SubscriptionDongelNo__c": {
+                                "type": "string"
+                            },
+                            "SubscriptionName": {
+                                "type": "string"
+                            },
+                            "AccountAccountNumber": {
+                                "type": "string"
+                            }
+                        }
                     }
                 },
                 "runAfter": {}

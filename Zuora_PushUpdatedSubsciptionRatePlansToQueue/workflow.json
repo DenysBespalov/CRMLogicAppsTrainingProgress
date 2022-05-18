@@ -1,0 +1,468 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "actions": {
+            "Get_Token": {
+                "type": "Http",
+                "inputs": {
+                    "method": "POST",
+                    "uri": "@{parameters('ZUORA_API_URL')}/oauth/token",
+                    "headers": {
+                        "Content-Type": "application/x-www-form-urlencoded"
+                    },
+                    "body": "client_id=@{parameters('ZUORA_CLIENT_ID')}&client_secret=@{parameters('ZUORA_CLIENT_SECRET')}&grant_type=client_credentials"
+                },
+                "runAfter": {
+                    "Initialize_Query_Result_Body": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Parse_token": {
+                "type": "ParseJson",
+                "inputs": {
+                    "content": "@body('Get_Token')",
+                    "schema": {
+                        "properties": {
+                            "access_token": {
+                                "type": "string"
+                            },
+                            "expires_in": {
+                                "type": "integer"
+                            },
+                            "jti": {
+                                "type": "string"
+                            },
+                            "scope": {
+                                "type": "string"
+                            },
+                            "token_type": {
+                                "type": "string"
+                            }
+                        },
+                        "type": "object"
+                    }
+                },
+                "runAfter": {
+                    "Get_Token": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Init_Subscriptions_Array": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varSubscriptionsList",
+                            "type": "array"
+                        }
+                    ]
+                },
+                "runAfter": {}
+            },
+            "Until_Subscriptions_Query_has_More_Records": {
+                "type": "Until",
+                "expression": "@equals(variables('varQueryEndFlag'), true)",
+                "limit": {
+                    "count": 60,
+                    "timeout": "PT1H"
+                },
+                "actions": {
+                    "Iterate_Subscriptions": {
+                        "type": "Foreach",
+                        "foreach": "@variables('varSubscriptionsList')",
+                        "actions": {
+                            "Get_subscription_details": {
+                                "type": "Http",
+                                "inputs": {
+                                    "method": "GET",
+                                    "uri": "https://rest.sandbox.eu.zuora.com/v1/subscriptions/@{items('Iterate_Subscriptions')?['Id']}",
+                                    "headers": {
+                                        "Authorization": "@{body('Parse_token')?['token_type']} @{body('Parse_token')?['access_token']}"
+                                    }
+                                },
+                                "runAfter": {}
+                            },
+                            "Parse_Subscription_Details": {
+                                "type": "ParseJson",
+                                "inputs": {
+                                    "content": "@body('Get_subscription_details')",
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "success": {
+                                                "type": "boolean"
+                                            },
+                                            "subscriptionNumber": {
+                                                "type": "string"
+                                            },
+                                            "subscriptionStartDate": {
+                                                "type": "string"
+                                            },
+                                            "subscriptionEndDate": {
+                                                "type": [
+                                                    "string",
+                                                    "null"
+                                                ]
+                                            },
+                                            "status": {
+                                                "type": "string"
+                                            },
+                                            "DongelNo__c": {
+                                                "type": "string"
+                                            },
+                                            "ratePlans": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "id": {
+                                                            "type": "string"
+                                                        },
+                                                        "productId": {
+                                                            "type": "string"
+                                                        },
+                                                        "productName": {
+                                                            "type": "string"
+                                                        },
+                                                        "productSku": {
+                                                            "type": "string"
+                                                        },
+                                                        "ratePlanName": {
+                                                            "type": "string"
+                                                        }
+                                                    },
+                                                    "required": [
+                                                        "id",
+                                                        "productId",
+                                                        "productName",
+                                                        "productSku",
+                                                        "ratePlanName"
+                                                    ]
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                "runAfter": {
+                                    "Get_subscription_details": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            },
+                            "Iterate_Rate_Plans": {
+                                "type": "Foreach",
+                                "foreach": "@body('Parse_Subscription_Details')?['ratePlans']",
+                                "actions": {
+                                    "Put_Message_to_Zuora_Queue": {
+                                        "type": "ServiceProvider",
+                                        "inputs": {
+                                            "parameters": {
+                                                "entityName": "sbq-zuoracrm",
+                                                "message": {
+                                                    "contentData": {
+                                                        "RatePlanId": "@{items('Iterate_Rate_Plans')?['id']}",
+                                                        "DongleSN": "@{body('Parse_Subscription_Details')?['DongelNo__c']}",
+                                                        "ProductSKU": "@{items('Iterate_Rate_Plans')?['productSku']}",
+                                                        "Status": "@{body('Parse_Subscription_Details')?['status']}",
+                                                        "ExpirationDate": "@{body('Parse_Subscription_Details')?['subscriptionStartDate']}"
+                                                    },
+                                                    "contentType": "application/json",
+                                                    "sessionId": "zuora-crm-session",
+                                                    "userProperties": {
+                                                        "MessageType": "Subscription.Updated"
+                                                    },
+                                                    "messageId": "rp-@{items('Iterate_Rate_Plans')?['id']}",
+                                                    "label": "@items('Iterate_Rate_Plans')?['productName']"
+                                                }
+                                            },
+                                            "serviceProviderConfiguration": {
+                                                "connectionName": "serviceBus",
+                                                "operationId": "sendMessage",
+                                                "serviceProviderId": "/serviceProviders/serviceBus"
+                                            }
+                                        },
+                                        "runAfter": {}
+                                    }
+                                },
+                                "runAfter": {
+                                    "Parse_Subscription_Details": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            }
+                        },
+                        "runAfter": {
+                            "Set_Query_Locator": [
+                                "Succeeded"
+                            ]
+                        },
+                        "runtimeConfiguration": {
+                            "concurrency": {
+                                "repetitions": 1
+                            }
+                        }
+                    },
+                    "Check_if_Query_First_Page": {
+                        "type": "If",
+                        "expression": {
+                            "and": [
+                                {
+                                    "equals": [
+                                        "@variables('varIsQueryFirstPage')",
+                                        "@true"
+                                    ]
+                                }
+                            ]
+                        },
+                        "actions": {
+                            "Run_Subscriptions_Query": {
+                                "type": "Http",
+                                "inputs": {
+                                    "method": "POST",
+                                    "uri": "@{parameters('ZUORA_API_URL')}/v1/action/query",
+                                    "headers": {
+                                        "Authorization": "@{body('Parse_token')?['token_type']} @{body('Parse_token')?['access_token']}",
+                                        "Content-Type": "application/json"
+                                    },
+                                    "body": {
+                                        "conf": {
+                                            "batchSize": 10
+                                        },
+                                        "queryString": "select Id, Name from Subscription"
+                                    }
+                                },
+                                "runAfter": {}
+                            },
+                            "Set_Result_Body_1": {
+                                "type": "SetVariable",
+                                "inputs": {
+                                    "name": "varQueryResultBody",
+                                    "value": "@{body('Run_Subscriptions_Query')}"
+                                },
+                                "runAfter": {
+                                    "Run_Subscriptions_Query": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            },
+                            "Drop_First_Page_Flag": {
+                                "type": "SetVariable",
+                                "inputs": {
+                                    "name": "varIsQueryFirstPage",
+                                    "value": "@false"
+                                },
+                                "runAfter": {
+                                    "Set_Result_Body_1": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            }
+                        },
+                        "runAfter": {},
+                        "else": {
+                            "actions": {
+                                "Run_Subscroptions_Query_More": {
+                                    "type": "Http",
+                                    "inputs": {
+                                        "method": "POST",
+                                        "uri": "@{parameters('ZUORA_API_URL')}/v1/action/queryMore",
+                                        "headers": {
+                                            "Authorization": "@{body('Parse_token')?['token_type']} @{body('Parse_token')?['access_token']}",
+                                            "Content-Type": "application/json"
+                                        },
+                                        "body": {
+                                            "queryLocator": "@{variables('varQueryPageLocator')}"
+                                        }
+                                    },
+                                    "runAfter": {}
+                                },
+                                "Set_Result_Body_2": {
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "varQueryResultBody",
+                                        "value": "@{body('Run_Subscroptions_Query_More')}"
+                                    },
+                                    "runAfter": {
+                                        "Run_Subscroptions_Query_More": [
+                                            "Succeeded"
+                                        ]
+                                    }
+                                }
+                            }
+                        },
+                        "description": "For pagination there is a different Method - queryMore"
+                    },
+                    "Set_Query_Locator": {
+                        "type": "SetVariable",
+                        "inputs": {
+                            "name": "varQueryPageLocator",
+                            "value": "@body('Parse_Subscriptions_Items')?['queryLocator']"
+                        },
+                        "runAfter": {
+                            "Set_Query_End_Flag": [
+                                "Succeeded"
+                            ]
+                        }
+                    },
+                    "Set_Query_End_Flag": {
+                        "type": "SetVariable",
+                        "inputs": {
+                            "name": "varQueryEndFlag",
+                            "value": "@body('Parse_Subscriptions_Items')?['done']"
+                        },
+                        "runAfter": {
+                            "Set_Subscriptions_List": [
+                                "Succeeded"
+                            ]
+                        }
+                    },
+                    "Set_Subscriptions_List": {
+                        "type": "SetVariable",
+                        "inputs": {
+                            "name": "varSubscriptionsList",
+                            "value": "@body('Parse_Subscriptions_Items')?['records']"
+                        },
+                        "runAfter": {
+                            "Parse_Subscriptions_Items": [
+                                "Succeeded"
+                            ]
+                        }
+                    },
+                    "Parse_Subscriptions_Items": {
+                        "type": "ParseJson",
+                        "inputs": {
+                            "content": "@variables('varQueryResultBody')",
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "queryLocator": {
+                                        "type": "string"
+                                    },
+                                    "size": {
+                                        "type": "integer"
+                                    },
+                                    "done": {
+                                        "type": "boolean"
+                                    },
+                                    "records": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "Name": {
+                                                    "type": "string"
+                                                },
+                                                "Id": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "Name",
+                                                "Id"
+                                            ]
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "runAfter": {
+                            "Check_if_Query_First_Page": [
+                                "Succeeded"
+                            ]
+                        }
+                    }
+                },
+                "runAfter": {
+                    "Parse_token": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Init_Query_End_Flag": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varQueryEndFlag",
+                            "type": "boolean",
+                            "value": "@false"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Init_Subscriptions_Array": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Initialize_Query_First_Page_Flag": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varIsQueryFirstPage",
+                            "type": "boolean",
+                            "value": "@true"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Init_Query_End_Flag": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Initialize_Query_Page_Locator": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varQueryPageLocator",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_Query_First_Page_Flag": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Initialize_Query_Result_Body": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varQueryResultBody",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_Query_Page_Locator": [
+                        "Succeeded"
+                    ]
+                }
+            }
+        },
+        "triggers": {
+            "Recurrence": {
+                "type": "Recurrence",
+                "recurrence": {
+                    "frequency": "Day",
+                    "interval": 1,
+                    "schedule": {
+                        "hours": [
+                            "6"
+                        ]
+                    }
+                }
+            }
+        },
+        "contentVersion": "1.0.0.0",
+        "outputs": {}
+    },
+    "kind": "Stateful"
+}

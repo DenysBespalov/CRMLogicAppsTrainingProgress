@@ -1,0 +1,582 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "actions": {
+            "Get_Token": {
+                "type": "Http",
+                "inputs": {
+                    "method": "POST",
+                    "uri": "@{parameters('ZUORA_API_URL')}/oauth/token",
+                    "headers": {
+                        "Content-Type": "application/x-www-form-urlencoded"
+                    },
+                    "body": "client_id=@{parameters('ZUORA_CLIENT_ID')}&client_secret=@{parameters('ZUORA_CLIENT_SECRET')}&grant_type=client_credentials"
+                },
+                "runAfter": {
+                    "Initialize_Contract_Status_Value": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Parse_token": {
+                "type": "ParseJson",
+                "inputs": {
+                    "content": "@body('Get_Token')",
+                    "schema": {
+                        "properties": {
+                            "access_token": {
+                                "type": "string"
+                            },
+                            "expires_in": {
+                                "type": "integer"
+                            },
+                            "jti": {
+                                "type": "string"
+                            },
+                            "scope": {
+                                "type": "string"
+                            },
+                            "token_type": {
+                                "type": "string"
+                            }
+                        },
+                        "type": "object"
+                    }
+                },
+                "runAfter": {
+                    "Get_Token": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Run_Subscriptions_Query": {
+                "type": "Http",
+                "inputs": {
+                    "method": "POST",
+                    "uri": "@{parameters('ZUORA_API_URL')}/v1/action/query",
+                    "headers": {
+                        "Authorization": "@{body('Parse_token')?['token_type']} @{body('Parse_token')?['access_token']}",
+                        "Content-Type": "application/json"
+                    },
+                    "body": {
+                        "queryString": "select Id, Name from Subscription where UpdatedDate >= '@{addDays(utcNow(), -1)}'"
+                    }
+                },
+                "runAfter": {
+                    "Parse_token": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Parse_Subscriptions_Items": {
+                "type": "ParseJson",
+                "inputs": {
+                    "content": "@body('Run_Subscriptions_Query')",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "done": {
+                                "type": "boolean"
+                            },
+                            "size": {
+                                "type": "integer"
+                            },
+                            "records": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "Id": {
+                                            "type": "string"
+                                        },
+                                        "Name": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "required": [
+                                        "Id",
+                                        "Name"
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                },
+                "runAfter": {
+                    "Run_Subscriptions_Query": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Iterate_Subscriptions": {
+                "type": "Foreach",
+                "foreach": "@body('Parse_Subscriptions_Items')?['records']",
+                "actions": {
+                    "Get_subscription_details": {
+                        "type": "Http",
+                        "inputs": {
+                            "method": "GET",
+                            "uri": "https://rest.sandbox.eu.zuora.com/v1/subscriptions/@{items('Iterate_Subscriptions')?['Id']}",
+                            "headers": {
+                                "Authorization": "@{body('Parse_token')?['token_type']} @{body('Parse_token')?['access_token']}"
+                            }
+                        },
+                        "runAfter": {}
+                    },
+                    "Parse_Subscription_Details": {
+                        "type": "ParseJson",
+                        "inputs": {
+                            "content": "@body('Get_subscription_details')",
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "success": {
+                                        "type": "boolean"
+                                    },
+                                    "subscriptionNumber": {
+                                        "type": "string"
+                                    },
+                                    "subscriptionStartDate": {
+                                        "type": "string"
+                                    },
+                                    "subscriptionEndDate": {
+                                        "type": [
+                                            "string",
+                                            "null"
+                                        ]
+                                    },
+                                    "status": {
+                                        "type": "string"
+                                    },
+                                    "DongelNo__c": {
+                                        "type": "string"
+                                    },
+                                    "ratePlans": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "id": {
+                                                    "type": "string"
+                                                },
+                                                "productId": {
+                                                    "type": "string"
+                                                },
+                                                "productName": {
+                                                    "type": "string"
+                                                },
+                                                "productSku": {
+                                                    "type": "string"
+                                                },
+                                                "ratePlanName": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [
+                                                "id",
+                                                "productId",
+                                                "productName",
+                                                "productSku",
+                                                "ratePlanName"
+                                            ]
+                                        }
+                                    },
+                                    "orderNumber": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        },
+                        "runAfter": {
+                            "Get_subscription_details": [
+                                "Succeeded"
+                            ]
+                        }
+                    },
+                    "Iterate_Rate_Plans": {
+                        "type": "Foreach",
+                        "foreach": "@body('Parse_Subscription_Details')?['ratePlans']",
+                        "actions": {
+                            "Search_for_Existing_Contracts": {
+                                "type": "ApiConnection",
+                                "inputs": {
+                                    "host": {
+                                        "connection": {
+                                            "referenceName": "commondataservice"
+                                        }
+                                    },
+                                    "method": "get",
+                                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('https://3shapedev.crm4.dynamics.com'))}/tables/@{encodeURIComponent(encodeURIComponent('sha_contractitems'))}/items",
+                                    "queries": {
+                                        "$filter": "sha_zuorarateplanid eq '@{items('Iterate_Rate_Plans')?['id']}'"
+                                    }
+                                },
+                                "runAfter": {
+                                    "Get_CRM_Product": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            },
+                            "Check_if_Subscription_exists": {
+                                "type": "If",
+                                "expression": {
+                                    "and": [
+                                        {
+                                            "equals": [
+                                                "@length(body('Search_for_Existing_Contracts')?['value'])",
+                                                0
+                                            ]
+                                        }
+                                    ]
+                                },
+                                "actions": {
+                                    "Create_New_Contract_Item": {
+                                        "type": "ApiConnection",
+                                        "inputs": {
+                                            "host": {
+                                                "connection": {
+                                                    "referenceName": "commondataservice"
+                                                }
+                                            },
+                                            "method": "post",
+                                            "body": {
+                                                "sha_contractstatus": "@variables('varContractItemStatusValue')",
+                                                "sha_expirydate": "@body('Parse_Subscription_Details')?['subscriptionEndDate']",
+                                                "sha_zuorarateplanid": "@items('Iterate_Rate_Plans')?['id']",
+                                                "_sha_dongle_value": "@variables('varDongleId')",
+                                                "_sha_product_value": "@variables('varProductId')"
+                                            },
+                                            "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('https://3shapedev.crm4.dynamics.com'))}/tables/@{encodeURIComponent(encodeURIComponent('sha_contractitems'))}/items"
+                                        },
+                                        "runAfter": {}
+                                    }
+                                },
+                                "runAfter": {
+                                    "Search_for_Existing_Contracts": [
+                                        "Succeeded"
+                                    ]
+                                },
+                                "else": {
+                                    "actions": {
+                                        "Update_existing_Contact_Item": {
+                                            "type": "ApiConnection",
+                                            "inputs": {
+                                                "host": {
+                                                    "connection": {
+                                                        "referenceName": "commondataservice"
+                                                    }
+                                                },
+                                                "method": "patch",
+                                                "body": {
+                                                    "sha_contractstatus": "@variables('varContractItemStatusValue')",
+                                                    "sha_expirydate": "@body('Parse_Subscription_Details')?['subscriptionEndDate']",
+                                                    "_sha_dongle_value": "@variables('varDongleId')",
+                                                    "_sha_product_value": "@variables('varProductId')"
+                                                },
+                                                "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('https://3shapedev.crm4.dynamics.com'))}/tables/@{encodeURIComponent(encodeURIComponent('sha_contractitems'))}/items/@{encodeURIComponent(encodeURIComponent(body('Search_for_Existing_Contracts')?['value']?[0]?['sha_contractitemid']))}"
+                                            },
+                                            "runAfter": {}
+                                        }
+                                    }
+                                },
+                                "description": "True - Create new subscription\nFalse - Update existing subscription"
+                            },
+                            "Get_CRM_Product": {
+                                "type": "Scope",
+                                "actions": {
+                                    "Get_Product_by_Product_Number": {
+                                        "type": "ApiConnection",
+                                        "inputs": {
+                                            "host": {
+                                                "connection": {
+                                                    "referenceName": "commondataservice"
+                                                }
+                                            },
+                                            "method": "get",
+                                            "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('https://3shapedev.crm4.dynamics.com'))}/tables/@{encodeURIComponent(encodeURIComponent('products'))}/items",
+                                            "queries": {
+                                                "$filter": "productnumber eq '@{items('Iterate_Rate_Plans')?['productSku']}'"
+                                            }
+                                        },
+                                        "runAfter": {
+                                            "Reset_Product": [
+                                                "Succeeded"
+                                            ]
+                                        }
+                                    },
+                                    "Check_if_Product_exists": {
+                                        "type": "If",
+                                        "expression": {
+                                            "and": [
+                                                {
+                                                    "greater": [
+                                                        "@length(body('Get_Product_by_Product_Number')?['value'])",
+                                                        0
+                                                    ]
+                                                }
+                                            ]
+                                        },
+                                        "actions": {
+                                            "Set_variable": {
+                                                "type": "SetVariable",
+                                                "inputs": {
+                                                    "name": "varProductId",
+                                                    "value": "@{body('Get_Product_by_Product_Number')?['value']?[0]?['productid']}"
+                                                },
+                                                "runAfter": {}
+                                            }
+                                        },
+                                        "runAfter": {
+                                            "Get_Product_by_Product_Number": [
+                                                "Succeeded"
+                                            ]
+                                        }
+                                    },
+                                    "Reset_Product": {
+                                        "type": "SetVariable",
+                                        "inputs": {
+                                            "name": "varProductId",
+                                            "value": "@{null}"
+                                        },
+                                        "runAfter": {}
+                                    }
+                                },
+                                "runAfter": {}
+                            }
+                        },
+                        "runAfter": {
+                            "Get_CRM_Dongle": [
+                                "Succeeded"
+                            ]
+                        }
+                    },
+                    "Get_CRM_Dongle": {
+                        "type": "Scope",
+                        "actions": {
+                            "Get_Dongle_by_Serial_Number": {
+                                "type": "ApiConnection",
+                                "inputs": {
+                                    "host": {
+                                        "connection": {
+                                            "referenceName": "commondataservice"
+                                        }
+                                    },
+                                    "method": "get",
+                                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('https://3shapedev.crm4.dynamics.com'))}/tables/@{encodeURIComponent(encodeURIComponent('sha_dongles'))}/items",
+                                    "queries": {
+                                        "$filter": "sha_serialnumber eq '@{body('Parse_Subscription_Details')?['DongelNo__c']}'"
+                                    }
+                                },
+                                "runAfter": {
+                                    "Reset_Dongle": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            },
+                            "Check_if_Dongle_exists": {
+                                "type": "If",
+                                "expression": {
+                                    "and": [
+                                        {
+                                            "greater": [
+                                                "@length(body('Get_Dongle_by_Serial_Number')?['value'])",
+                                                0
+                                            ]
+                                        }
+                                    ]
+                                },
+                                "actions": {
+                                    "Set_Dongle_CRM_Id": {
+                                        "type": "SetVariable",
+                                        "inputs": {
+                                            "name": "varDongleId",
+                                            "value": "@{body('Get_Dongle_by_Serial_Number')?['value']?[0]?['sha_dongleid']}"
+                                        },
+                                        "runAfter": {}
+                                    }
+                                },
+                                "runAfter": {
+                                    "Get_Dongle_by_Serial_Number": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            },
+                            "Reset_Dongle": {
+                                "type": "SetVariable",
+                                "inputs": {
+                                    "name": "varDongleId",
+                                    "value": "@{null}"
+                                },
+                                "runAfter": {}
+                            }
+                        },
+                        "runAfter": {
+                            "Set_Contract_Item_Status_Value": [
+                                "Succeeded"
+                            ]
+                        }
+                    },
+                    "Set_Contract_Item_Status_Value": {
+                        "type": "SetVariable",
+                        "inputs": {
+                            "name": "varContractItemStatusValue",
+                            "value": "@body('Get_Contact_Item_Status_by_Name')?[0]?['Value']"
+                        },
+                        "runAfter": {
+                            "Get_Contact_Item_Status_by_Name": [
+                                "Succeeded"
+                            ]
+                        }
+                    },
+                    "Get_Contact_Item_Status_by_Name": {
+                        "type": "Query",
+                        "inputs": {
+                            "from": "@variables('varContactStatusMapping')",
+                            "where": "@equals(item()?['Name'], body('Parse_Subscription_Details')?['status'])"
+                        },
+                        "runAfter": {
+                            "Parse_Subscription_Details": [
+                                "Succeeded"
+                            ]
+                        }
+                    }
+                },
+                "runAfter": {
+                    "Initialize_Status_Mapping": [
+                        "Succeeded"
+                    ]
+                },
+                "runtimeConfiguration": {
+                    "concurrency": {
+                        "repetitions": 1
+                    }
+                }
+            },
+            "Initialize_CRM_Contact_Item_Id": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varCrmContractItemId",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "runAfter": {}
+            },
+            "Initialize_CRM_Dongle_Id": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varDongleId",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_CRM_Contact_Item_Id": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Initialize_CRM_Product_Id": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varProductId",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_CRM_Dongle_Id": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Initialize_Contract_Status_Value": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varContractItemStatusValue",
+                            "type": "integer",
+                            "value": 131920001
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_CRM_Product_Id": [
+                        "Succeeded"
+                    ]
+                },
+                "description": "Default - Active"
+            },
+            "Initialize_Status_Mapping": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varContactStatusMapping",
+                            "type": "array",
+                            "value": [
+                                {
+                                    "Name": "Draft",
+                                    "Value": 131920000
+                                },
+                                {
+                                    "Name": "Active",
+                                    "Value": 131920001
+                                },
+                                {
+                                    "Name": "Expired",
+                                    "Value": 131920002
+                                },
+                                {
+                                    "Name": "Pending Activation",
+                                    "Value": 131920003
+                                },
+                                {
+                                    "Name": "Pending Acceptance",
+                                    "Value": 131920004
+                                },
+                                {
+                                    "Name": "Cancelled",
+                                    "Value": 131920005
+                                },
+                                {
+                                    "Name": "Suspended",
+                                    "Value": 131920006
+                                }
+                            ]
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Parse_Subscriptions_Items": [
+                        "Succeeded"
+                    ]
+                }
+            }
+        },
+        "triggers": {
+            "Recurrence": {
+                "type": "Recurrence",
+                "recurrence": {
+                    "frequency": "Day",
+                    "interval": 1,
+                    "schedule": {
+                        "hours": [
+                            "6"
+                        ]
+                    }
+                }
+            }
+        },
+        "contentVersion": "1.0.0.0",
+        "outputs": {}
+    },
+    "kind": "Stateful"
+}

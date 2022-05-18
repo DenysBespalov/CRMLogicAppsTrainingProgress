@@ -1,0 +1,422 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "actions": {
+            "Check_If_Contact_Exist": {
+                "type": "If",
+                "expression": {
+                    "and": [
+                        {
+                            "greater": [
+                                "@length(body('Get_Contact_By_ID')?['value'])",
+                                0
+                            ]
+                        }
+                    ]
+                },
+                "actions": {
+                    "Set_company_id": {
+                        "type": "SetVariable",
+                        "inputs": {
+                            "name": "varCompanyId",
+                            "value": "@{body('Get_Contact_By_ID')?['value']?[0]?['_parentcustomerid_value']}"
+                        },
+                        "runAfter": {
+                            "Set_contact_id": [
+                                "Succeeded"
+                            ]
+                        }
+                    },
+                    "Set_contact_email": {
+                        "type": "SetVariable",
+                        "inputs": {
+                            "name": "varContactEmail",
+                            "value": "@{body('Get_Contact_By_ID')?['value']?[0]?['emailaddress1']}"
+                        },
+                        "runAfter": {}
+                    },
+                    "Set_contact_id": {
+                        "type": "SetVariable",
+                        "inputs": {
+                            "name": "varContactId",
+                            "value": "@{body('Get_Contact_By_ID')?['value']?[0]?['contactid']}"
+                        },
+                        "runAfter": {
+                            "Set_contact_email": [
+                                "Succeeded"
+                            ]
+                        }
+                    }
+                },
+                "runAfter": {
+                    "Response": [
+                        "Succeeded"
+                    ]
+                },
+                "else": {
+                    "actions": {
+                        "Contact_not_found": {
+                            "type": "Terminate",
+                            "inputs": {
+                                "runStatus": "Cancelled"
+                            },
+                            "runAfter": {}
+                        }
+                    }
+                }
+            },
+            "Check_event": {
+                "type": "If",
+                "expression": {
+                    "and": [
+                        {
+                            "equals": [
+                                "@triggerBody()?['event']",
+                                "course.enrollment.created"
+                            ]
+                        }
+                    ]
+                },
+                "actions": {
+                    "Create_Enrollment_Course": {
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": {
+                                "connection": {
+                                    "referenceName": "commondataservice"
+                                }
+                            },
+                            "method": "post",
+                            "body": {
+                                "sha_course_name": "@triggerBody()?['payload']?['course_name']",
+                                "sha_course_id": "@{triggerBody()?['payload']?['course_id']}",
+                                "sha_enrollment_date": "@triggerBody()?['payload']?['enrollment_date']",
+                                "sha_enrollment_status": 131920000,
+                                "_sha_account_value": "@variables('varCompanyId')",
+                                "_sha_contact_value": "@variables('varContactId')"
+                            },
+                            "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('https://3shapedev.crm4.dynamics.com'))}/tables/@{encodeURIComponent(encodeURIComponent('sha_lms_course_enrollments'))}/items"
+                        },
+                        "runAfter": {}
+                    }
+                },
+                "runAfter": {
+                    "Set_Enrollment_Status_Value": [
+                        "Succeeded"
+                    ]
+                },
+                "else": {
+                    "actions": {
+                        "Check_LMS_Course": {
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "referenceName": "commondataservice"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('https://3shapedev.crm4.dynamics.com'))}/tables/@{encodeURIComponent(encodeURIComponent('sha_lms_course_enrollments'))}/items",
+                                "queries": {
+                                    "$filter": "(sha_course_id eq '@{triggerBody()?['payload']?['course_id']}') and (sha_contact/emailaddress1 eq '@{variables('varContactEmail')}')",
+                                    "$top": 1
+                                }
+                            },
+                            "runAfter": {}
+                        },
+                        "Check_Course_Exists": {
+                            "type": "If",
+                            "expression": {
+                                "and": [
+                                    {
+                                        "not": {
+                                            "equals": [
+                                                "@length(body('Check_LMS_Course')?['value'])",
+                                                0
+                                            ]
+                                        }
+                                    }
+                                ]
+                            },
+                            "actions": {
+                                "Update_Enrollment_Status": {
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": {
+                                            "connection": {
+                                                "referenceName": "commondataservice"
+                                            }
+                                        },
+                                        "method": "patch",
+                                        "body": {
+                                            "sha_completion_date": "@triggerBody()?['payload']?['completion_date']",
+                                            "sha_enrollment_status": "@variables('varEnrollmentStatus')"
+                                        },
+                                        "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('https://3shapedev.crm4.dynamics.com'))}/tables/@{encodeURIComponent(encodeURIComponent('sha_lms_course_enrollments'))}/items/@{encodeURIComponent(encodeURIComponent(body('Check_LMS_Course')?['value']?[0]?['sha_lms_course_enrollmentid']))}"
+                                    },
+                                    "runAfter": {}
+                                }
+                            },
+                            "runAfter": {
+                                "Check_LMS_Course": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "else": {
+                                "actions": {
+                                    "Create_Enrollment_Backup": {
+                                        "type": "ApiConnection",
+                                        "inputs": {
+                                            "host": {
+                                                "connection": {
+                                                    "referenceName": "commondataservice"
+                                                }
+                                            },
+                                            "method": "post",
+                                            "body": {
+                                                "sha_course_name": "@triggerBody()?['payload']?['course_name']",
+                                                "sha_completion_date": "@triggerBody()?['payload']?['completion_date']",
+                                                "sha_course_id": "@{triggerBody()?['payload']?['course_id']}",
+                                                "sha_enrollment_date": "@triggerBody()?['payload']?['enrollment_date']",
+                                                "sha_enrollment_status": "@variables('varEnrollmentStatus')",
+                                                "_sha_account_value": "@variables('varCompanyId')",
+                                                "_sha_contact_value": "@variables('varContactId')"
+                                            },
+                                            "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('https://3shapedev.crm4.dynamics.com'))}/tables/@{encodeURIComponent(encodeURIComponent('sha_lms_course_enrollments'))}/items"
+                                        },
+                                        "runAfter": {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "course.enrollment.created\nor\ncourse.enrollment.updated\ncourse.enrollment.completed\n\n"
+            },
+            "Get_Contact_By_ID": {
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "referenceName": "commondataservice"
+                        }
+                    },
+                    "method": "get",
+                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('https://3shapedev.crm4.dynamics.com'))}/tables/@{encodeURIComponent(encodeURIComponent('contacts'))}/items",
+                    "queries": {
+                        "$filter": "sha_lmsid eq '@{triggerBody()?['payload']?['user_id']}' and statecode eq 0"
+                    }
+                },
+                "runAfter": {
+                    "Initialize_Enrollment_Status_Mappings": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Get_Status_Value": {
+                "type": "Query",
+                "inputs": {
+                    "from": "@variables('varStatusMappings')",
+                    "where": "@equals(item()?['Name'], triggerBody()?['payload']?['status'])"
+                },
+                "runAfter": {
+                    "Check_If_Contact_Exist": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Initialize_Company_Id": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varCompanyId",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_Contact_Id": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Initialize_Contact_Email": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varContactEmail",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_Company_Id": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Initialize_Contact_Id": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varContactId",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "runAfter": {}
+            },
+            "Initialize_Enrollment_Status_Mappings": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varStatusMappings",
+                            "type": "array",
+                            "value": [
+                                {
+                                    "Name": "subscribed",
+                                    "Value": 131920000
+                                },
+                                {
+                                    "Name": "in_progress",
+                                    "Value": 131920001
+                                },
+                                {
+                                    "Name": "waiting",
+                                    "Value": 131920002
+                                },
+                                {
+                                    "Name": "subscription_to_confirm",
+                                    "Value": 131920003
+                                },
+                                {
+                                    "Name": "suspended",
+                                    "Value": 131920004
+                                },
+                                {
+                                    "Name": "overbooking",
+                                    "Value": 131920005
+                                },
+                                {
+                                    "Name": "completed",
+                                    "Value": 131920006
+                                }
+                            ]
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_Status": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Initialize_Status": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varEnrollmentStatus",
+                            "type": "integer",
+                            "value": 131920000
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_Contact_Email": [
+                        "Succeeded"
+                    ]
+                },
+                "description": "Default - Subscribed (131920000)"
+            },
+            "Set_Enrollment_Status_Value": {
+                "type": "SetVariable",
+                "inputs": {
+                    "name": "varEnrollmentStatus",
+                    "value": "@body('Get_Status_Value')?[0]?['Value']"
+                },
+                "runAfter": {
+                    "Get_Status_Value": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Response": {
+                "type": "Response",
+                "kind": "http",
+                "inputs": {
+                    "statusCode": 200
+                },
+                "runAfter": {
+                    "Get_Contact_By_ID": [
+                        "Succeeded"
+                    ]
+                }
+            }
+        },
+        "triggers": {
+            "manual": {
+                "type": "Request",
+                "kind": "Http",
+                "inputs": {
+                    "schema": {
+                        "properties": {
+                            "event": {
+                                "type": "string"
+                            },
+                            "fired_by_batch_action": {
+                                "type": "boolean"
+                            },
+                            "message_id": {
+                                "type": "string"
+                            },
+                            "payload": {
+                                "properties": {
+                                    "completion_date": {
+                                        "type": "string"
+                                    },
+                                    "course_id": {
+                                        "type": "integer"
+                                    },
+                                    "course_name": {
+                                        "type": "string"
+                                    },
+                                    "enrollment_date": {
+                                        "type": "string"
+                                    },
+                                    "fired_at": {
+                                        "type": "string"
+                                    },
+                                    "level": {
+                                        "type": "string"
+                                    },
+                                    "status": {
+                                        "type": "string"
+                                    },
+                                    "subscribed_by_id": {
+                                        "type": "integer"
+                                    },
+                                    "user_id": {
+                                        "type": "integer"
+                                    },
+                                    "username": {
+                                        "type": "string"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        },
+                        "type": "object"
+                    }
+                }
+            }
+        },
+        "contentVersion": "1.0.0.0",
+        "outputs": {}
+    },
+    "kind": "Stateful"
+}

@@ -10,5 +10,20 @@
       "displayName": "zuora-service-bus"
     }
   },
-  "managedApiConnections": {}
+  "managedApiConnections": {
+    "commondataservice": {
+      "api": {
+        "id": "/subscriptions/0df5caa6-afaf-432b-b246-e9565aa553d1/providers/Microsoft.Web/locations/northeurope/managedApis/commondataservice"
+      },
+      "connection": {
+        "id": "/subscriptions/0df5caa6-afaf-432b-b246-e9565aa553d1/resourceGroups/rg-crm-development/providers/Microsoft.Web/connections/commondataservice"
+      },
+      "connectionRuntimeUrl": "https://aca4a2dc1ecac738.09.common.logic-northeurope.azure-apihub.net/apim/commondataservice/6868d72617f84d40b24a16168fdfed09/",
+      "authentication": {
+        "type": "Raw",
+        "scheme": "Key",
+        "parameter": "@appsetting('commondataservice-connectionKey')"
+      }
+    }
+  }
 }

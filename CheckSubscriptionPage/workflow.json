@@ -1,0 +1,76 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "actions": {
+            "Condition": {
+                "type": "If",
+                "expression": {
+                    "and": [
+                        {
+                            "equals": [
+                                "@triggerBody()?['Done']",
+                                "@true"
+                            ]
+                        }
+                    ]
+                },
+                "actions": {
+                    "Terminate_2": {
+                        "type": "Terminate",
+                        "inputs": {
+                            "runStatus": "Cancelled"
+                        },
+                        "runAfter": {}
+                    }
+                },
+                "runAfter": {
+                    "Response": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Response": {
+                "type": "Response",
+                "kind": "http",
+                "inputs": {
+                    "statusCode": 200
+                },
+                "runAfter": {}
+            }
+        },
+        "triggers": {
+            "manual": {
+                "type": "Request",
+                "kind": "Http",
+                "inputs": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "FirstPage": {
+                                "type": "boolean"
+                            },
+                            "Done": {
+                                "type": "boolean"
+                            },
+                            "Size": {
+                                "type": "integer"
+                            },
+                            "Page": {
+                                "type": "integer"
+                            },
+                            "PageBody": {
+                                "type": "string"
+                            },
+                            "Locator": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "contentVersion": "1.0.0.0",
+        "outputs": {}
+    },
+    "kind": "Stateful"
+}
